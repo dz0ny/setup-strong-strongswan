@@ -58,10 +58,6 @@ bigEcho () {
   echo ""
 }
 
-pacapt () {
-  eval "$STRONGSWAN_TMP/pacapt $@"
-}
-
 backupCredentials () {
   if [ -f /etc/ipsec.secrets ]; then
     cp /etc/ipsec.secrets /etc/ipsec.secrets.backup
@@ -180,94 +176,17 @@ fi
 
 #################################################################
 
-# Checks if curl is installed
 
-call which curl
-if [ "$?" = "1" ]; then
-  bigEcho "This script requires curl to be installed, to work correctly."
-  exit 1
-fi
-
-#################################################################
-
-# Checks if an ipsec binary is already installed
-
-call which ipsec
-if [ "$?" = "0" ]; then
-  echo "An ipsec binary is already installed and present on this machine!"
-  
-  if [ "$INTERACTIVE" = "0" ]; then
-    bigEcho "Ignored this warning in non-interactive mode..."
-  else
-    echo -n "Do you wish to continue? [y|n] "
-
-    while true; do
-      read -p "" yn
-      case $yn in
-          [Yy]* ) break;;
-          [Nn]* ) exit 0;;
-          * ) echo "Please answer with Yes or No [y|n].";;
-      esac
-    done
-  fi
-fi
-
-#################################################################
-
-# Clean up and create compilation environment
-call rm -rf $STRONGSWAN_TMP
-call mkdir -p $STRONGSWAN_TMP
-
-curl -sSL "https://github.com/icy/pacapt/raw/ng/pacapt" > $STRONGSWAN_TMP/pacapt
-if [ "$?" = "1" ]; then
-  bigEcho "An unexpected error occured while downloading pacapt!"
-  exit 1
-fi
-
-call chmod +x $STRONGSWAN_TMP/pacapt
-
-echo ""
 
 #################################################################
 
 bigEcho "Installing necessary dependencies"
 
-call pacapt -Sy --noconfirm
-checkForError
-
-call pacapt -S --noconfirm -- make g++ gcc iptables xl2tpd libssl-dev module-init-tools curl openssl-devel
+call opkg install kmod-ppp kmod-ipsec4 kmod-ipsec kmod-crypto-md5 iptables-mod-ipsec ipsec-tools ppp xl2tpd strongswan-mod-eap-md5 strongswan-mod-eap-identity strongswan-mod-eap-radius strongswan-mod-eap-mschapv2 strongswan-mod-eap-tls strongswan-mod-xauth-eap
 checkForError
 
 #################################################################
 
-bigEcho "Installing StrongSwan..."
-
-call mkdir -p $STRONGSWAN_TMP/src
-curl -sSL "https://download.strongswan.org/strongswan-$STRONGSWAN_VERSION.tar.gz" | tar -zxC $STRONGSWAN_TMP/src --strip-components 1
-checkForError
-
-cd $STRONGSWAN_TMP/src
-./configure --prefix=/usr --sysconfdir=/etc \
-  --enable-eap-radius \
-  --enable-eap-mschapv2 \
-  --enable-eap-identity \
-  --enable-eap-md5 \
-  --enable-eap-mschapv2 \
-  --enable-eap-tls \
-  --enable-eap-ttls \
-  --enable-eap-peap \
-  --enable-eap-tnc \
-  --enable-eap-dynamic \
-  --enable-xauth-eap \
-  --enable-openssl \
-  --disable-gmp
-checkForError
-
-make
-checkForError
-
-make install
-checkForError
 
 #################################################################
 
@@ -425,79 +344,6 @@ else
   getCredentials
   writeCredentials
 fi
-
-#################################################################
-
-bigEcho "Applying changes..."
-
-iptables --table nat --append POSTROUTING --jump MASQUERADE
-echo 1 > /proc/sys/net/ipv4/ip_forward
-for each in /proc/sys/net/ipv4/conf/*
-do
-  echo 0 > $each/accept_redirects
-  echo 0 > $each/send_redirects
-done
-
-#################################################################
-
-bigEcho "Create /etc/init.d/vpn-assist helper..."
-
-cat > /etc/init.d/vpn-assist <<'EOF'
-#!/bin/sh
-### BEGIN INIT INFO
-# Provides:          vpn
-# Required-Start:    $network $local_fs
-# Required-Stop:     $network $local_fs
-# Default-Start:     2 3 4 5
-# Default-Stop:      0 1 6
-# Short-Description: Strongswan and L2TPD helper
-# Description:       Service that starts up XL2TPD and IPSEC
-### END INIT INFO
-
-# Author: Phil Plückthun <phil@plckthn.me>
-
-case "$1" in
-  start)
-    iptables --table nat --append POSTROUTING --jump MASQUERADE
-    echo 1 > /proc/sys/net/ipv4/ip_forward
-    for each in /proc/sys/net/ipv4/conf/*
-    do
-      echo 0 > $each/accept_redirects
-      echo 0 > $each/send_redirects
-    done
-    /usr/sbin/xl2tpd -p /var/run/xl2tpd.pid -c /etc/xl2tpd/xl2tpd.conf -C /var/run/xl2tpd.control
-    ipsec start
-    ;;
-  stop)
-    iptables --table nat --flush
-    echo 0 > /proc/sys/net/ipv4/ip_forward
-    kill $(cat /var/run/xl2tpd.pid)
-    ipsec stop
-    ;;
-  restart)
-    echo "Restarting IPSec and XL2TPD"
-    iptables --table nat --append POSTROUTING --jump MASQUERADE
-    echo 1 > /proc/sys/net/ipv4/ip_forward
-    for each in /proc/sys/net/ipv4/conf/*
-    do
-      echo 0 > $each/accept_redirects
-      echo 0 > $each/send_redirects
-    done
-    kill $(cat /var/run/xl2tpd.pid)
-    /usr/sbin/xl2tpd -p /var/run/xl2tpd.pid -c /etc/xl2tpd/xl2tpd.conf -C /var/run/xl2tpd.control
-    ipsec restart
-    ;;
-esac
-exit 0
-EOF
-
-chmod +x /etc/init.d/vpn-assist
-
-#################################################################
-
-bigEcho "Starting up VPN..."
-
-/etc/init.d/vpn-assist start
 
 #################################################################
 
